@@ -84,6 +84,14 @@ table.card th,table.card td{padding:5px 6px;text-align:center;min-width:26px;bor
 table.card th:first-child,table.card td:first-child{text-align:left;position:sticky;left:0;background:var(--soft);min-width:84px;font-weight:600}
 table.card thead th{color:var(--muted);font-weight:500}
 td.wS{background:var(--gold-soft);color:var(--gold);font-weight:600} td.wM{background:var(--green-soft);color:var(--green);font-weight:600}
+.mrow{display:grid;grid-template-columns:1fr auto 1fr;gap:8px}
+.ms{font-weight:600;line-height:1.3;min-width:0;overflow-wrap:anywhere}
+.ms.M-t{text-align:right}
+.mc{text-align:center;min-width:84px}
+.mc small{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.chip{display:inline-block;font-family:var(--display);font-weight:700;font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;background:var(--soft);color:var(--muted);white-space:nowrap}
+.chip.S{background:var(--gold-fill);color:#1c1503} .chip.M{background:var(--green-fill);color:#ffffff}
+table.card td{white-space:nowrap}
 .seg{display:flex;gap:6px;flex-wrap:wrap}
 .seg button{flex:1;min-width:92px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 6px;text-align:center;line-height:1.2}
 .seg button small{display:block;font-size:11px;color:var(--muted)}
@@ -192,12 +200,14 @@ function sidePts(fmt, arr){
   return fmt==='mult' ? arr.reduce((a,b)=>a*b,1) : Math.max(...arr);
 }
 function matchState(cfg,scores,r,m){
-  const fmt=FMT[r].key, holes=[]; let sW=0,mW=0,played=0;
+  const fmt=FMT[r].key, holes=[]; let sW=0,mW=0,played=0,u=0;
   for(let i=0;i<18;i++){
     const s=sidePts(fmt,m.S.map(id=>hole(cfg,scores,r,id,i).pts)), q=sidePts(fmt,m.M.map(id=>hole(cfg,scores,r,id,i).pts));
     let res=null;
-    if(s!=null&&q!=null){ played++; res=s>q?'S':q>s?'M':'H'; if(res==='S')sW++; if(res==='M')mW++; }
-    holes.push({s,q,res});
+    let run=null;
+    if(s!=null&&q!=null){ played++; res=s>q?'S':q>s?'M':'H'; if(res==='S'){sW++;u++} if(res==='M'){mW++;u--}
+      run={t:u?Math.abs(u)+'UP':'AS', lead:u>0?'S':u<0?'M':null}; }
+    holes.push({s,q,res,run});
   }
   const up=sW-mW, left=18-played, lead=up>0?'S':up<0?'M':null, a=Math.abs(up);
   const decided=played>0&&(left===0||a>left);
@@ -207,10 +217,16 @@ function matchState(cfg,scores,r,m){
     else if(decided) text=TEAM[lead]+' win '+a+' & '+left;
     else text=(lead?TEAM[lead]+' '+a+' up':'All square')+' thru '+played;
   }
+  let short='–', sub='Not started';
+  if(played>0){
+    if(left===0){ short=lead?a+' UP':'HALVED'; sub='Final'; }
+    else if(decided){ short=a+' & '+left; sub='Final'; }
+    else { short=lead?a+' UP':'A/S'; sub='Thru '+played; }
+  }
   const live={S:0,M:0}, won={S:0,M:0};
   if(played>0){ if(lead) live[lead]=1; else {live.S=.5;live.M=.5} }
   if(decided){ won.S=live.S; won.M=live.M; }
-  return {holes,sW,mW,played,left,lead,decided,text,live,won};
+  return {holes,sW,mW,played,left,lead,decided,text,short,sub,live,won};
 }
 function cup(cfg,scores){
   const out={won:{S:0,M:0},live:{S:0,M:0},rounds:[]};
@@ -300,22 +316,24 @@ function setStatus(){
 
 function table(head,rows){
   return '<div class="scroll"><table class="card"><thead><tr>'+head.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+
-    rows.map(r=>'<tr>'+r.map((c,i)=>i?(c&&c.cls?'<td class="'+c.cls+'">'+c.v+'</td>':'<td>'+c+'</td>'):'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
+    rows.map(r=>'<tr>'+r.map(c=>c!==null&&typeof c==='object'?'<td'+(c.cls?' class="'+c.cls+'"':'')+'>'+c.v+'</td>':'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
 }
 const HEAD=['Hole',...Array.from({length:18},(_,i)=>i+1),'Tot'];
 const show=v=>v==null?'·':v;
 
 function vCup(c){
-  let h='<h2>Tour Cup</h2><p class="sub">Each match is worth 1 point, ½ each if halved. 8 points in play; 4½ wins the cup. Live projection: Stingers '+half(c.live.S)+' – '+half(c.live.M)+' Mulligans.</p>';
+  let h='<h2>Tour Cup</h2><p class="sub">Each match is worth 1 point, ½ each if halved. 8 points in play; 4½ wins the cup. Tap a match for the hole-by-hole card. Live projection: Stingers '+half(c.live.S)+' – '+half(c.live.M)+' Mulligans.</p>';
   c.rounds.forEach((R,r)=>{
     h+='<section class="panel"><div class="ph"><h3>Day '+(r+1)+' · '+FMT[r].name+'</h3><span class="sub">'+esc(cfg.courses[r].name)+' · '+half(R.won.S)+' – '+half(R.won.M)+'</span></div>';
     R.ms.forEach(x=>{
-      const st=x.st, cls=st.lead||'';
-      h+='<details><summary class="row"><span class="chev">›</span><div class="grow"><div><span class="S-t">'+names(x.m.S)+'</span> <span class="sub" style="display:inline">v</span> <span class="M-t">'+names(x.m.M)+'</span></div>'+
-        '<div class="sub">Holes won '+st.sW+' – '+st.mW+'</div></div><span class="pill '+cls+'">'+esc(st.text)+'</span></summary>'+
-        table(HEAD,[
+      const st=x.st, side=ids=>ids.map(nm).map(esc).join('<br>')||'Not set';
+      h+='<details><summary class="row mrow"><div class="ms S-t">'+side(x.m.S)+'</div>'+
+        '<div class="mc"><span class="chip '+(st.lead||'')+'">'+st.short+'</span><small>'+st.sub+' ›</small></div>'+
+        '<div class="ms M-t">'+side(x.m.M)+'</div></summary>'+
+        table(HEAD.slice(0,19).concat('Won'),[
           ['Stingers',...st.holes.map(o=>({v:show(o.s),cls:o.res==='S'?'wS':''})),st.sW],
-          ['Mulligans',...st.holes.map(o=>({v:show(o.q),cls:o.res==='M'?'wM':''})),st.mW]])+'</details>';
+          ['Mulligans',...st.holes.map(o=>({v:show(o.q),cls:o.res==='M'?'wM':''})),st.mW],
+          ['Match',...st.holes.map(o=>o.run?{v:o.run.t,cls:o.run.lead?'w'+o.run.lead:''}:{v:'·',cls:''}),{v:st.short,cls:st.lead?'w'+st.lead:''}]])+'</details>';
     });
     h+='</section>';
   });
