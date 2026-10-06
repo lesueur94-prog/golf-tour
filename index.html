@@ -110,6 +110,7 @@ table.card td{white-space:nowrap}
 .step output{width:34px;text-align:center;font-family:var(--display);font-weight:700;font-size:26px}
 .clr{border:0;background:none;color:var(--muted);font-size:12px;padding:4px;text-decoration:underline}
 .res{padding:9px 14px;border-top:1px solid var(--line);background:var(--soft);font-size:13px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.wrap>h3{margin-top:4px}
 .teamgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .tcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .tcard.S{border-top:4px solid var(--gold-fill)} .tcard.M{border-top:4px solid var(--green-fill)}
@@ -178,15 +179,18 @@ const DEFAULT = {
   pairs:[
     {gideon:'A',zander:'A',tiaan:'B',adrian:'B',locky:'A',jarik:'A',juanre:'B',stephen:'B'},
     {gideon:'A',tiaan:'A',zander:'B',adrian:'B',locky:'A',juanre:'A',jarik:'B',stephen:'B'}],
-  singles:[{s:'gideon',m:'locky'},{s:'zander',m:'jarik'},{s:'tiaan',m:'juanre'},{s:'adrian',m:'stephen'}]
+  singles:[{s:'gideon',m:'locky'},{s:'zander',m:'jarik'},{s:'tiaan',m:'juanre'},{s:'adrian',m:'stephen'}],
+  days:[0,1,2]
 };
+/* The course assigned to a day (0, 1 or 2). */
+function course(cfg,r){ return cfg.courses[(cfg.days||[0,1,2])[r]]||cfg.courses[0]; }
 /* Shots a player gets on a hole: full handicap spread by stroke index. */
 function strokes(hcp, si){ const h=Math.max(0,Math.round(+hcp||0)); return Math.floor(h/18)+(si<=h%18?1:0); }
 /* Net Stableford: 2 for net par, +1 per shot better, never below 0. */
 function pts(gross, par, st){ return gross>0 ? Math.max(0, par+st-gross+2) : null; }
 function player(cfg,id){ return cfg.players.find(p=>p.id===id); }
 function hole(cfg,scores,r,pid,i){
-  const p=player(cfg,pid), c=cfg.courses[r], g=((scores[r]||{})[pid]||[])[i]||0, st=strokes(p?p.hcp:0,c.si[i]);
+  const p=player(cfg,pid), c=course(cfg,r), g=((scores[r]||{})[pid]||[])[i]||0, st=strokes(p?p.hcp:0,c.si[i]);
   return {g, st, pts:pts(g,c.par[i],st)};
 }
 function matches(cfg,r){
@@ -258,7 +262,10 @@ function validate(cfg){
       return 'Day '+(r+1)+': '+TEAM[t]+' need two players in pair A and two in pair B.';
   const ms=cfg.singles.map(x=>x.m);
   if(new Set(ms).size!==4) return 'Day 3: each Mulligan must be drawn against exactly one Stinger.';
+  if(!cfg.courses.length) return 'Add at least one course.';
+  for(let r=0;r<3;r++) if(!cfg.courses[(cfg.days||[])[r]]) return 'Day '+(r+1)+' has no course assigned.';
   for(const c of cfg.courses){
+    if(!String(c.name||'').trim()) return 'Every course needs a name.';
     if(c.par.some(v=>!(v>=3&&v<=6))) return c.name+': every par must be between 3 and 6.';
     if(new Set(c.si).size!==18||c.si.some(v=>!(v>=1&&v<=18))) return c.name+': stroke indexes must be 1 to 18, each used once.';
   }
@@ -285,6 +292,8 @@ const FIREBASE = {
 };
 let cfg=clone(DEFAULT), scores=[{},{},{}], fdb=null, online=false, loaded=false, canWrite=false, draft=null, setupMsg='', confirmClear=false;
 let pin='', myPin=String(store.get('pin','')), pinMsg='';
+let stab=store.get('stab','teams'), openCourse=-1;
+if(!['teams','courses','cup'].includes(stab)) stab='teams';
 const unlocked=()=>!pin||myPin===pin;
 const arr=x=>Array.isArray(x)?x:(x&&typeof x==='object'?Object.keys(x).sort((a,b)=>a-b).map(k=>x[k]):[]);
 function pinBox(){
@@ -324,7 +333,7 @@ const show=v=>v==null?'·':v;
 function vCup(c){
   let h='<h2>Tour Cup</h2><p class="sub">Each match is worth 1 point, ½ each if halved. 8 points in play; 4½ wins the cup. Tap a match for the hole-by-hole card. Live projection: Stingers '+half(c.live.S)+' – '+half(c.live.M)+' Mulligans.</p>';
   c.rounds.forEach((R,r)=>{
-    h+='<section class="panel"><div class="ph"><h3>Day '+(r+1)+' · '+FMT[r].name+'</h3><span class="sub">'+esc(cfg.courses[r].name)+' · '+half(R.won.S)+' – '+half(R.won.M)+'</span></div>';
+    h+='<section class="panel"><div class="ph"><h3>Day '+(r+1)+' · '+FMT[r].name+'</h3><span class="sub">'+esc(course(cfg,r).name)+' · '+half(R.won.S)+' – '+half(R.won.M)+'</span></div>';
     R.ms.forEach(x=>{
       const st=x.st, side=ids=>ids.map(nm).map(esc).join('<br>')||'Not set';
       h+='<details><summary class="row mrow"><div class="ms S-t">'+side(x.m.S)+'</div>'+
@@ -347,7 +356,7 @@ function vPlayers(){
     if(x.pts!==last){pos=i+1;last=x.pts}
     const rows=[];
     [0,1,2].forEach(r=>{ const hs=Array.from({length:18},(_,k)=>hole(cfg,scores,r,x.p.id,k));
-      rows.push([esc(cfg.courses[r].name),...hs.map(o=>o.g||'·'),x.rounds[r].strokes||'·']);
+      rows.push([esc(course(cfg,r).name),...hs.map(o=>o.g||'·'),x.rounds[r].strokes||'·']);
       rows.push(['Points',...hs.map(o=>show(o.pts)),x.rounds[r].pts]); });
     h+='<details><summary class="row"><span class="pos">'+pos+'</span><span class="dot '+x.p.team+'"></span><div class="grow"><div style="font-weight:600">'+esc(x.p.name)+'</div><div class="sub">Hcp '+x.p.hcp+' · '+x.rounds.map(o=>o.pts).join(' / ')+' pts by round</div></div>'+
       '<div class="num"><span class="big">'+x.strokes+'</span><small>strokes</small></div><div class="num"><span class="big">'+x.pts+'</span><small>points</small></div></summary>'+table(HEAD,rows)+'</details>';
@@ -359,14 +368,14 @@ function vTeams(c){
   let h='<h2>Team leaderboard</h2><p class="sub">All four players’ gross strokes and net Stableford points added together.</p><div class="teamgrid">';
   ['S','M'].forEach(k=>{
     h+='<div class="tcard '+k+'"><h3 class="'+k+'-t">'+TEAM[k]+'</h3><div><span class="big">'+t[k].pts+'</span><span class="lbl">points</span></div><div><span class="big" style="font-size:26px">'+t[k].strokes+'</span><span class="lbl">strokes</span></div>'+
-      [0,1,2].map(r=>'<div class="kv"><span>'+esc(cfg.courses[r].name)+'</span><span>'+t[k].rounds[r].pts+' pts · '+t[k].rounds[r].strokes+'</span></div>').join('')+
+      [0,1,2].map(r=>'<div class="kv"><span>'+esc(course(cfg,r).name)+'</span><span>'+t[k].rounds[r].pts+' pts · '+t[k].rounds[r].strokes+'</span></div>').join('')+
       '<div class="kv"><span>Cup points</span><span><b>'+half(c.won[k])+'</b></span></div></div>';
   });
   return h+'</div>';
 }
 function vScores(){
-  const c=cfg.courses[rnd], ms=matches(cfg,rnd);
-  let h='<h2>Enter scores</h2><div class="seg">'+[0,1,2].map(r=>'<button data-act="rnd" data-v="'+r+'" aria-pressed="'+(r===rnd)+'">Day '+(r+1)+' · '+esc(cfg.courses[r].name)+'<small>'+FMT[r].short+'</small></button>').join('')+'</div>';
+  const c=course(cfg,rnd), ms=matches(cfg,rnd);
+  let h='<h2>Enter scores</h2><div class="seg">'+[0,1,2].map(r=>'<button data-act="rnd" data-v="'+r+'" aria-pressed="'+(r===rnd)+'">Day '+(r+1)+' · '+esc(course(cfg,r).name)+'<small>'+FMT[r].short+'</small></button>').join('')+'</div>';
   h+='<div class="holes">'+Array.from({length:18},(_,i)=>{
     const done=cfg.players.every(p=>hole(cfg,scores,rnd,p.id,i).g>0);
     return '<button data-act="hole" data-v="'+i+'" class="'+(done?'done':'')+'" aria-pressed="'+(i===hl)+'" aria-label="Hole '+(i+1)+'">'+(i+1)+'</button>'}).join('')+'</div>';
@@ -390,8 +399,12 @@ function vSetup(){
   if(!draft) draft=clone(cfg);
   const d=draft; let h='<h2>Setup</h2>';
   if(fdb&&!unlocked()) h+=pinBox();
+  h+='<div class="seg">'+[['teams','Teams'],['courses','Courses'],['cup','Cup']].map(x=>'<button data-act="stab" data-v="'+x[0]+'" aria-pressed="'+(stab===x[0])+'">'+x[1]+'</button>').join('')+'</div>';
+  if(stab==='teams'){
   h+='<section class="panel"><div class="ph"><h3>Players and handicaps</h3></div><div class="form">'+
     d.players.map((p,i)=>'<div class="frow"><span class="dot '+p.team+'"></span><input type="text" id="pn'+i+'" data-f="name" data-i="'+i+'" value="'+esc(p.name)+'" aria-label="Player name"><input type="number" id="ph'+i+'" data-f="hcp" data-i="'+i+'" min="0" max="54" value="'+p.hcp+'" aria-label="Handicap"></div>').join('')+'</div></section>';
+  }
+  if(stab==='cup'){
   [0,1].forEach(r=>{
     h+='<section class="panel"><div class="ph"><h3>Day '+(r+1)+' pairs · '+FMT[r].short+'</h3><span class="sub">A plays A, B plays B</span></div><div class="form">'+
       d.players.map(p=>'<div class="frow"><span class="dot '+p.team+'"></span><span class="grow">'+esc(p.name)+'</span><div class="ab">'+['A','B'].map(g=>'<button data-act="pair" data-r="'+r+'" data-p="'+p.id+'" data-v="'+g+'" aria-pressed="'+(d.pairs[r][p.id]===g)+'">'+g+'</button>').join('')+'</div></div>').join('')+'</div></section>';
@@ -399,15 +412,30 @@ function vSetup(){
   h+='<section class="panel"><div class="ph"><h3>Day 3 singles</h3></div><div class="form">'+
     d.singles.map((x,i)=>'<div class="frow"><span class="dot S"></span><span style="width:76px">'+esc((d.players.find(p=>p.id===x.s)||{}).name||'')+'</span><span class="sub">v</span><select id="sg'+i+'" data-f="single" data-i="'+i+'" aria-label="Opponent">'+
       d.players.filter(p=>p.team==='M').map(p=>'<option value="'+p.id+'"'+(p.id===x.m?' selected':'')+'>'+esc(p.name)+'</option>').join('')+'</select></div>').join('')+'</div></section>';
-  d.courses.forEach((c,ci)=>{
-    h+='<details class="panel"><summary class="row"><span class="chev">›</span><div class="grow"><b>Day '+(ci+1)+' course: '+esc(c.name)+'</b><div class="sub">Par '+c.par.reduce((a,b)=>a+b,0)+' · pars and stroke indexes</div></div></summary><div class="cgrid"><span class="lbl">Hole</span><span class="lbl">Par</span><span class="lbl">Stroke</span>'+
-      c.par.map((v,i)=>'<span>'+(i+1)+'</span><input type="number" id="cp'+ci+'_'+i+'" data-f="par" data-c="'+ci+'" data-i="'+i+'" min="3" max="6" value="'+v+'" aria-label="Par hole '+(i+1)+'"><input type="number" id="cs'+ci+'_'+i+'" data-f="si" data-c="'+ci+'" data-i="'+i+'" min="1" max="18" value="'+c.si[i]+'" aria-label="Stroke index hole '+(i+1)+'">').join('')+'</div></details>';
-  });
+  }
+  if(stab==='courses'){
+    h+='<section class="panel"><div class="ph"><h3>Course for each day</h3></div><div class="form">'+
+      [0,1,2].map(r=>'<div class="frow"><span style="width:118px"><b>Day '+(r+1)+'</b><span class="sub" style="display:block">'+FMT[r].short+'</span></span><select id="dc'+r+'" data-f="day" data-i="'+r+'" aria-label="Course for day '+(r+1)+'">'+
+        d.courses.map((c,ci)=>'<option value="'+ci+'"'+(d.days[r]===ci?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</select></div>').join('')+'</div></section>';
+    h+='<h3>Courses</h3>';
+    d.courses.forEach((c,ci)=>{
+      const used=[0,1,2].filter(r=>d.days[r]===ci).map(r=>'Day '+(r+1)), locked=used.length>0||d.courses.length<2;
+      h+='<details class="panel"'+(openCourse===ci?' open':'')+'><summary class="row"><span class="chev">›</span><div class="grow"><b>'+esc(c.name)+'</b><div class="sub">Par '+c.par.reduce((a,b)=>a+b,0)+' · '+(used.length?used.join(', '):'Not assigned to a day')+'</div></div></summary>'+
+        '<div class="form"><div class="frow"><span class="lbl" style="width:48px">Name</span><input type="text" id="cn'+ci+'" data-f="cname" data-c="'+ci+'" maxlength="30" value="'+esc(c.name)+'" aria-label="Course name"></div></div>'+
+        '<div class="cgrid"><span class="lbl">Hole</span><span class="lbl">Par</span><span class="lbl">Stroke</span>'+
+        c.par.map((v,i)=>'<span>'+(i+1)+'</span><input type="number" id="cp'+ci+'_'+i+'" data-f="par" data-c="'+ci+'" data-i="'+i+'" min="3" max="6" value="'+v+'" aria-label="Par hole '+(i+1)+'"><input type="number" id="cs'+ci+'_'+i+'" data-f="si" data-c="'+ci+'" data-i="'+i+'" min="1" max="18" value="'+c.si[i]+'" aria-label="Stroke index hole '+(i+1)+'">').join('')+'</div>'+
+        '<div class="form"><div class="btns"><button class="btn ghost" data-act="delcourse" data-c="'+ci+'"'+(locked?' disabled':'')+'>Remove this course</button></div>'+(used.length?'<p class="sub">Assign another course to '+used.join(' and ')+' before removing this one.</p>':'')+'</div></details>';
+    });
+    h+='<div class="btns"><button class="btn ghost" data-act="addcourse">Add a course</button></div>';
+  }
+  h+='<p class="sub">Changes on all three tabs are saved together.</p>';
   h+='<div class="btns"><button class="btn" data-act="save"'+(canWrite?'':' disabled')+'>Save setup</button><button class="btn ghost" data-act="reset">Undo my changes</button></div>';
   if(setupMsg) h+='<p class="msg'+(/^(Saved|Test|All|PIN)/.test(setupMsg)?' ok':'')+'">'+esc(setupMsg)+'</p>';
+  if(stab==='teams'){
   h+='<section class="panel"><div class="ph"><h3>Scorer PIN</h3></div><div class="form"><p class="sub">Digits only. Scorers enter it once per phone. Leave it blank for no PIN.</p><div class="frow"><input type="text" inputmode="numeric" id="newPin" maxlength="8" autocomplete="off" value="'+(canWrite?esc(pin):'')+'" aria-label="New scorer PIN"'+(canWrite?'':' disabled')+'><button class="btn ghost" data-act="savepin"'+(canWrite?'':' disabled')+'>Save PIN</button></div></div></section>';
   h+='<section class="panel"><div class="ph"><h3>Test data</h3></div><div class="form"><p class="sub">Load the spreadsheet’s test scores (every player 4 on every hole) to check the leaderboards, then clear them before the tour.</p><div class="btns"><button class="btn ghost" data-act="sample"'+(canWrite?'':' disabled')+'>Load test scores</button>'+
     (confirmClear?'<button class="btn danger" data-act="clearall2">Yes, delete every score</button><button class="btn ghost" data-act="clearno">Keep them</button>':'<button class="btn ghost" data-act="clearall"'+(canWrite?'':' disabled')+'>Clear all scores</button>')+'</div></div></section>';
+  }
   return h;
 }
 function render(){
@@ -454,8 +482,9 @@ function onScores(snap){
 function onConfig(snap){
   const x=snap.val();
   if(x){
-    const n={players:arr(x.players),courses:arr(x.courses).map(c=>({name:String(c.name||''),par:arr(c.par).map(Number),si:arr(c.si).map(Number)})),pairs:arr(x.pairs),singles:arr(x.singles)};
-    if(n.players.length===8&&n.courses.length===3&&n.courses.every(c=>c.par.length===18&&c.si.length===18)&&n.pairs.length===2&&n.singles.length===4) cfg=n;
+    const n={players:arr(x.players),courses:arr(x.courses).map(c=>({name:String(c.name||''),par:arr(c.par).map(Number),si:arr(c.si).map(Number)})),pairs:arr(x.pairs),singles:arr(x.singles),days:arr(x.days).map(Number)};
+    if(n.days.length!==3||n.days.some(v=>!n.courses[v])) n.days=[0,1,2].map(v=>Math.min(v,n.courses.length-1));
+    if(n.players.length===8&&n.courses.length>=1&&n.courses.every(c=>c.par.length===18&&c.si.length===18)&&n.pairs.length===2&&n.singles.length===4) cfg=n;
   }
   if(tab!=='setup') draft=null;
   soft();
@@ -467,10 +496,13 @@ document.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]'); if(!b||b.disabled)return; const a=b.dataset.act, v=b.dataset.v, pid=b.dataset.p;
   if(a==='rnd'){rnd=+v;store.set('rnd',rnd);render()}
   else if(a==='hole'){hl=+v;store.set('hole',hl);render()}
-  else if(a==='inc'||a==='dec'){e.preventDefault();const g=hole(cfg,scores,rnd,pid,hl).g;setScore(rnd,pid,hl,g?Math.min(15,Math.max(1,g+(a==='inc'?1:-1))):cfg.courses[rnd].par[hl])}
+  else if(a==='inc'||a==='dec'){e.preventDefault();const g=hole(cfg,scores,rnd,pid,hl).g;setScore(rnd,pid,hl,g?Math.min(15,Math.max(1,g+(a==='inc'?1:-1))):course(cfg,rnd).par[hl])}
   else if(a==='clear'){e.preventDefault();setScore(rnd,pid,hl,0)}
   else if(a==='pair'){draft.pairs[+b.dataset.r][pid]=v;setupMsg='';render()}
-  else if(a==='reset'){draft=clone(cfg);setupMsg='';render()}
+  else if(a==='reset'){draft=clone(cfg);setupMsg='';openCourse=-1;render()}
+  else if(a==='stab'){stab=v;store.set('stab',stab);render()}
+  else if(a==='addcourse'){draft.courses.push({name:'New course',par:Array(18).fill(4),si:Array.from({length:18},(_,k)=>k+1)});openCourse=draft.courses.length-1;setupMsg='';render()}
+  else if(a==='delcourse'){const c=+b.dataset.c; if(draft.courses.length>1&&!draft.days.includes(c)){draft.courses.splice(c,1);draft.days=draft.days.map(x=>x>c?x-1:x);openCourse=-1;setupMsg='';render()}}
   else if(a==='save'){
     const err=validate(draft); if(err){setupMsg=err;render();return}
     setupMsg='Saving…';render();
@@ -500,6 +532,8 @@ document.addEventListener('input',e=>{
   if(f==='name') draft.players[i].name=el.value.slice(0,20)||'Player';
   else if(f==='hcp') draft.players[i].hcp=Math.max(0,Math.min(54,Math.round(+el.value||0)));
   else if(f==='single') draft.singles[i].m=el.value;
+  else if(f==='cname') draft.courses[+el.dataset.c].name=el.value.slice(0,30);
+  else if(f==='day'){draft.days[i]=+el.value;render()}
   else if(f==='par') draft.courses[+el.dataset.c].par[i]=Math.round(+el.value||0);
   else if(f==='si') draft.courses[+el.dataset.c].si[i]=Math.round(+el.value||0);
 });
